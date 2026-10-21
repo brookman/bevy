@@ -62,6 +62,23 @@ fn main() {
     #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
     app.add_systems(Update, toggle_dlss_rr);
 
+    #[cfg(all(feature = "metalfx", target_os = "macos"))]
+    app.add_systems(
+        Update,
+        (
+            metalfx::enable_by_default,
+            metalfx::toggle,
+            metalfx::disable_for_pathtracer.after(toggle_pathtracer),
+        ),
+    )
+    .add_systems(
+        PostUpdate,
+        (
+            metalfx::control_text.after(update_control_text),
+            metalfx::performance_text.after(update_performance_text),
+        ),
+    );
+
     app.run();
 }
 
@@ -917,4 +934,106 @@ fn update_performance_text(
         (add_diagnostic)("DLSS-RR", "render/dlss_ray_reconstruction/elapsed_gpu");
     }
     text.push_str(&format!("{:17}  {total:.2} ms\n", "Total"));
+}
+
+#[cfg(all(feature = "metalfx", target_os = "macos"))]
+mod metalfx {
+    use super::{ControlRow, PerformanceText};
+    use bevy::{
+        anti_alias::metalfx::{MetalFxDenoiser, MetalFxDenoiserSupported},
+        diagnostic::{Diagnostic, DiagnosticPath, DiagnosticsStore},
+        prelude::*,
+        render::camera::{MipBias, TemporalJitter},
+        solari::{pathtracer::Pathtracer, prelude::SolariLighting},
+    };
+
+    pub fn enable_by_default(
+        mut commands: Commands,
+        cameras: Query<Entity, Added<SolariLighting>>,
+        supported: Option<Res<MetalFxDenoiserSupported>>,
+    ) {
+        if supported.is_some() {
+            for entity in &cameras {
+                commands.entity(entity).insert(MetalFxDenoiser::default());
+            }
+        }
+    }
+
+    /// The reference pathtracer accumulates on its own, so MetalFX must not run on top of it.
+    pub fn disable_for_pathtracer(
+        mut commands: Commands,
+        cameras: Query<Entity, (With<Pathtracer>, With<MetalFxDenoiser>)>,
+    ) {
+        for entity in &cameras {
+            commands
+                .entity(entity)
+                .remove::<(MetalFxDenoiser, TemporalJitter, MipBias)>();
+        }
+    }
+
+    pub fn toggle(
+        mut commands: Commands,
+        camera: Option<Single<(Entity, Option<&mut MetalFxDenoiser>), With<SolariLighting>>>,
+        supported: Option<Res<MetalFxDenoiserSupported>>,
+        key_input: Res<ButtonInput<KeyCode>>,
+    ) {
+        let (Some(camera), Some(_)) = (camera, supported) else {
+            return;
+        };
+        let (entity, denoiser) = camera.into_inner();
+        if key_input.just_pressed(KeyCode::Digit2) {
+            if denoiser.is_some() {
+                commands
+                    .entity(entity)
+                    .remove::<(MetalFxDenoiser, TemporalJitter, MipBias)>();
+            } else {
+                commands.entity(entity).insert(MetalFxDenoiser::default());
+            }
+        } else if key_input.just_pressed(KeyCode::KeyU)
+            && let Some(mut denoiser) = denoiser
+        {
+            denoiser.upscale_ratio = if denoiser.upscale_ratio > 1.0 { 1.0 } else { 2.0 };
+        }
+    }
+
+    pub fn control_text(
+        mut rows: Query<(&ControlRow, &mut Text)>,
+        supported: Option<Res<MetalFxDenoiserSupported>>,
+        camera: Query<Option<&MetalFxDenoiser>, With<SolariLighting>>,
+    ) {
+        for (row, mut text) in &mut rows {
+            if !matches!(row, ControlRow::Denoising) {
+                continue;
+            }
+            text.0.clear();
+            if supported.is_none() {
+                text.0.push_str("MetalFX denoiser not supported");
+                continue;
+            }
+            match camera.single() {
+                Ok(Some(denoiser)) => text.0.push_str(&format!(
+                    "Disable MetalFX denoiser  -  (U) toggle upscaling ({:.1}x)",
+                    denoiser.upscale_ratio
+                )),
+                Ok(None) => text.0.push_str("Enable MetalFX denoiser"),
+                Err(_) => text.0.push_str("MetalFX denoiser (realtime lighting only)"),
+            }
+        }
+    }
+
+    pub fn performance_text(
+        mut text: Single<&mut Text, With<PerformanceText>>,
+        diagnostics: Res<DiagnosticsStore>,
+        camera: Query<Has<MetalFxDenoiser>, With<SolariLighting>>,
+    ) {
+        if !matches!(camera.single(), Ok(true)) {
+            return;
+        }
+        if let Some(value) = diagnostics
+            .get(&DiagnosticPath::new("render/metalfx_denoiser/elapsed_gpu"))
+            .and_then(Diagnostic::smoothed)
+        {
+            text.push_str(&format!("{:17}  {value:.2} ms\n", "MetalFX"));
+        }
+    }
 }
