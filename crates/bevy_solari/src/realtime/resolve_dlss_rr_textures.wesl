@@ -130,13 +130,18 @@ fn replace_primary_surface(
     let primary_distance = length(primary_world_position - view.world_position);
     let path_length = primary_distance + psr.reflection_length;
 
-    // Too curved to track the reflection; fall back to the surface's own motion so the guide is not stale
+    let virtual_position = primary_world_position - (primary_wo * psr.reflection_length);
+
+    // Too curved to track the reflection; fall back to the surface's own motion so the guide is not
+    // stale. Depth and normals also stay those of the reflector, but the albedo guides still describe
+    // the reflected surface, so the denoiser can preserve its texture detail instead of treating it
+    // as noise on a uniformly colored mirror.
     if psr.replace_fully && 2.0 * reflector_curvature(pixel_id, primary_normal) * psr.reflection_length > MAX_VIRTUAL_DEPTH_JITTER * path_length {
         textureStore(specular_motion_vectors, pixel_id, vec4(load_motion_vector(pixel_id), vec2(0.0)));
+        write_reflected_albedos(pixel_id, psr, ray_hit, primary_material, primary_normal, primary_wo, primary_F_ab, virtual_position);
         return;
     }
 
-    let virtual_position = primary_world_position - (primary_wo * psr.reflection_length);
     let world_motion = ray_hit.previous_frame_world_position - ray_hit.world_position;
     let virtual_previous_position = virtual_position + apply_mirror_chain(psr, world_motion);
     let specular_motion_vector = calculate_motion_vector(virtual_position, virtual_previous_position);
@@ -147,13 +152,31 @@ fn replace_primary_surface(
         return;
     }
 
-    let wo = normalize(view.world_position - virtual_position);
     let virtual_normal = normalize(apply_mirror_chain(psr, ray_hit.world_normal));
 
     let primary_depth = textureLoad(depth_buffer, pixel_id, 0);
     textureStore(dlss_rr_depth, pixel_id, vec4(primary_depth * primary_distance / path_length));
     @if(MOTION_VECTORS_READ_WRITE)
     textureStore(motion_vectors, pixel_id, vec4(specular_motion_vector, vec2(0.0)));
+
+    write_reflected_albedos(pixel_id, psr, ray_hit, primary_material, primary_normal, primary_wo, primary_F_ab, virtual_position);
+    textureStore(normal_roughness, pixel_id, vec4(virtual_normal, ray_hit.material.perceptual_roughness));
+}
+
+/// Albedo guides for a pixel whose primary surface is a mirror: the reflected surface's albedo,
+/// attenuated by the mirror chain, combined with the mirror's own.
+fn write_reflected_albedos(
+    pixel_id: vec2<u32>,
+    psr: PsrState,
+    ray_hit: ResolvedRayHitFull,
+    primary_material: ResolvedMaterial,
+    primary_normal: vec3<f32>,
+    primary_wo: vec3<f32>,
+    primary_F_ab: vec2<f32>,
+    virtual_position: vec3<f32>,
+) {
+    let wo = normalize(view.world_position - virtual_position);
+    let virtual_normal = normalize(apply_mirror_chain(psr, ray_hit.world_normal));
 
     let reflected_diffuse = calculate_diffuse_color(ray_hit.material.base_color, ray_hit.material.metallic, 0.0, 0.0);
     let reflected_F0 = calculate_F0(ray_hit.material.base_color, ray_hit.material.metallic, vec3(ray_hit.material.reflectance));
@@ -167,7 +190,6 @@ fn replace_primary_surface(
 
     textureStore(diffuse_albedo, pixel_id, vec4(psr.throughput * reflected_diffuse + own_diffuse, 0.0));
     textureStore(specular_albedo, pixel_id, vec4(mix(own_specular, psr.throughput * reflected_specular, specular_fraction), 0.0));
-    textureStore(normal_roughness, pixel_id, vec4(virtual_normal, ray_hit.material.perceptual_roughness));
 }
 
 fn primary_surface_glossy(material: ResolvedMaterial) -> bool {
