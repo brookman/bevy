@@ -28,6 +28,8 @@ pub struct MetalFxDenoiserContext {
     pub(super) scaler: Mutex<ffi::Scaler>,
     /// Single-channel roughness, extracted from the packed normal/roughness guide buffer.
     pub(super) roughness: CachedTexture,
+    /// Motion vectors consistent with primary surface replacement (see `prepare_inputs.wgsl`).
+    pub(super) motion: CachedTexture,
     pub(super) upscale_ratio: f32,
 }
 
@@ -105,11 +107,23 @@ pub fn prepare_metalfx(
                 };
                 info!("Created MetalFX denoiser ({input_size} -> {output_size})");
 
-                let roughness = create_roughness_texture(&render_device, input_size);
+                let roughness = create_input_texture(
+                    &render_device,
+                    input_size,
+                    "metalfx_roughness",
+                    TextureFormat::R32Float,
+                );
+                let motion = create_input_texture(
+                    &render_device,
+                    input_size,
+                    "metalfx_motion",
+                    TextureFormat::Rg16Float,
+                );
                 commands.entity(entity).insert((
                     MetalFxDenoiserContext {
                         scaler: Mutex::new(scaler),
                         roughness,
+                        motion,
                         upscale_ratio: denoiser.upscale_ratio,
                     },
                     MainPassResolutionOverride(input_size),
@@ -124,14 +138,19 @@ pub fn prepare_metalfx(
     }
 }
 
-fn create_roughness_texture(render_device: &RenderDevice, size: UVec2) -> CachedTexture {
+fn create_input_texture(
+    render_device: &RenderDevice,
+    size: UVec2,
+    label: &'static str,
+    format: TextureFormat,
+) -> CachedTexture {
     let texture = render_device.create_texture(&TextureDescriptor {
-        label: Some("metalfx_roughness"),
+        label: Some(label),
         size: size.to_extents(),
         mip_level_count: 1,
         sample_count: 1,
         dimension: TextureDimension::D2,
-        format: TextureFormat::R32Float,
+        format,
         usage: TextureUsages::TEXTURE_BINDING | TextureUsages::STORAGE_BINDING,
         view_formats: &[],
     });

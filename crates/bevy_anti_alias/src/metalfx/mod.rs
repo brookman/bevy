@@ -41,7 +41,7 @@ pub struct MetalFxPlugin;
 impl Plugin for MetalFxPlugin {
     fn build(&self, app: &mut App) {
         app.register_type::<MetalFxDenoiser>();
-        embedded_asset!(app, "extract_roughness.wgsl");
+        embedded_asset!(app, "prepare_inputs.wgsl");
     }
 
     fn finish(&self, app: &mut App) {

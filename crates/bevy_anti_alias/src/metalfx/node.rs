@@ -10,7 +10,7 @@ use bevy_render::{
     camera::TemporalJitter,
     diagnostic::RecordDiagnostics,
     render_resource::{
-        binding_types::{texture_2d, texture_storage_2d},
+        binding_types::{texture_2d, texture_depth_2d, texture_storage_2d},
         BindGroupEntries, BindGroupLayoutDescriptor, BindGroupLayoutEntries,
         CachedComputePipelineId, CommandEncoderDescriptor, ComputePassDescriptor,
         ComputePipelineDescriptor, PipelineCache, ShaderStages, StorageTextureAccess,
@@ -23,8 +23,8 @@ use bevy_utils::default;
 
 #[derive(Resource)]
 pub struct MetalFxPipelines {
-    extract_roughness_layout: BindGroupLayoutDescriptor,
-    extract_roughness_pipeline: CachedComputePipelineId,
+    prepare_inputs_layout: BindGroupLayoutDescriptor,
+    prepare_inputs_pipeline: CachedComputePipelineId,
 }
 
 pub fn init_metalfx_pipelines(
@@ -32,27 +32,32 @@ pub fn init_metalfx_pipelines(
     pipeline_cache: Res<PipelineCache>,
     asset_server: Res<AssetServer>,
 ) {
-    let extract_roughness_layout = BindGroupLayoutDescriptor::new(
-        "metalfx_extract_roughness_bind_group_layout",
+    let prepare_inputs_layout = BindGroupLayoutDescriptor::new(
+        "metalfx_prepare_inputs_bind_group_layout",
         &BindGroupLayoutEntries::sequential(
             ShaderStages::COMPUTE,
             (
                 texture_2d(TextureSampleType::Float { filterable: false }),
+                texture_depth_2d(),
+                texture_2d(TextureSampleType::Float { filterable: false }),
+                texture_2d(TextureSampleType::Float { filterable: false }),
+                texture_2d(TextureSampleType::Float { filterable: false }),
                 texture_storage_2d(TextureFormat::R32Float, StorageTextureAccess::WriteOnly),
+                texture_storage_2d(TextureFormat::Rg16Float, StorageTextureAccess::WriteOnly),
             ),
         ),
     );
-    let extract_roughness_pipeline =
+    let prepare_inputs_pipeline =
         pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
-            label: Some("metalfx_extract_roughness_pipeline".into()),
-            layout: vec![extract_roughness_layout.clone()],
-            shader: load_embedded_asset!(asset_server.as_ref(), "extract_roughness.wgsl"),
-            entry_point: Some("extract_roughness".into()),
+            label: Some("metalfx_prepare_inputs_pipeline".into()),
+            layout: vec![prepare_inputs_layout.clone()],
+            shader: load_embedded_asset!(asset_server.as_ref(), "prepare_inputs.wgsl"),
+            entry_point: Some("prepare_inputs".into()),
             ..default()
         });
     commands.insert_resource(MetalFxPipelines {
-        extract_roughness_layout,
-        extract_roughness_pipeline,
+        prepare_inputs_layout,
+        prepare_inputs_pipeline,
     });
 }
 
@@ -77,12 +82,15 @@ pub fn metalfx_denoiser(
     let Some(pipelines) = pipelines else {
         return;
     };
-    let Some(extract_roughness_pipeline) =
-        pipeline_cache.get_compute_pipeline(pipelines.extract_roughness_pipeline)
+    let Some(prepare_inputs_pipeline) =
+        pipeline_cache.get_compute_pipeline(pipelines.prepare_inputs_pipeline)
     else {
         return;
     };
-    let Some(motion_vectors) = &prepass_textures.motion_vectors else {
+    let (Some(motion_vectors), Some(prepass_depth)) = (
+        prepass_textures.motion_vectors_view(),
+        prepass_textures.depth_only_view(),
+    ) else {
         return;
     };
 
@@ -93,23 +101,29 @@ pub fn metalfx_denoiser(
     let diagnostics = diagnostics.as_deref();
     let time_span = diagnostics.time_span(ctx.command_encoder(), "metalfx_denoiser");
 
-    // 1. Unpack roughness into its own texture.
+    // 1. Adapt the guide buffers to MetalFX conventions (standalone roughness, PSR-consistent
+    //    motion vectors).
     let bind_group = render_device.create_bind_group(
-        "metalfx_extract_roughness_bind_group",
-        &pipeline_cache.get_bind_group_layout(&pipelines.extract_roughness_layout),
+        "metalfx_prepare_inputs_bind_group",
+        &pipeline_cache.get_bind_group_layout(&pipelines.prepare_inputs_layout),
         &BindGroupEntries::sequential((
             &guides.normal_roughness.default_view,
+            prepass_depth,
+            &guides.depth.default_view,
+            motion_vectors,
+            &guides.specular_motion_vectors.default_view,
             &context.roughness.default_view,
+            &context.motion.default_view,
         )),
     );
     {
         let mut pass = ctx
             .command_encoder()
             .begin_compute_pass(&ComputePassDescriptor {
-                label: Some("metalfx_extract_roughness"),
+                label: Some("metalfx_prepare_inputs"),
                 timestamp_writes: None,
             });
-        pass.set_pipeline(extract_roughness_pipeline);
+        pass.set_pipeline(prepare_inputs_pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
         pass.dispatch_workgroups(
             render_resolution.x.div_ceil(8),
@@ -124,7 +138,7 @@ pub fn metalfx_denoiser(
         color: post_process.source_texture,
         output: post_process.destination_texture,
         depth: &guides.depth.texture,
-        motion: &motion_vectors.texture.texture,
+        motion: &context.motion.texture,
         diffuse_albedo: &guides.diffuse_albedo.texture,
         specular_albedo: &guides.specular_albedo.texture,
         normal: &guides.normal_roughness.texture,
