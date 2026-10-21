@@ -35,7 +35,6 @@ use bevy_render::{
         raw_vulkan_init::{AdditionalVulkanFeatures, RawVulkanInitSettings},
         RenderDevice, RenderQueue,
     },
-    texture::CachedTexture,
     view::prepare_view_targets,
     ExtractSchedule, Render, RenderApp, RenderSystems,
 };
@@ -231,6 +230,9 @@ impl<F: DlssFeature> Default for Dlss<F> {
 pub trait DlssFeature: Reflect + Clone + Default {
     type Context: Send;
 
+    /// Whether this feature needs [`crate::denoiser_guides::ViewDenoiserGuideTextures`].
+    const NEEDS_GUIDE_BUFFERS: bool = false;
+
     fn upscaled_resolution(context: &Self::Context) -> UVec2;
 
     fn render_resolution(context: &Self::Context) -> UVec2;
@@ -312,6 +314,8 @@ pub struct DlssRayReconstructionFeature;
 impl DlssFeature for DlssRayReconstructionFeature {
     type Context = DlssRayReconstruction;
 
+    const NEEDS_GUIDE_BUFFERS: bool = true;
+
     fn upscaled_resolution(context: &Self::Context) -> UVec2 {
         context.upscaled_resolution().into()
     }
@@ -357,14 +361,7 @@ impl DlssFeature for DlssRayReconstructionFeature {
 }
 
 /// Additional textures needed as inputs for [`DlssRayReconstructionFeature`].
-#[derive(Component)]
-pub struct ViewDlssRayReconstructionTextures {
-    pub diffuse_albedo: CachedTexture,
-    pub specular_albedo: CachedTexture,
-    pub normal_roughness: CachedTexture,
-    pub depth: CachedTexture,
-    pub specular_motion_vectors: CachedTexture,
-}
+pub use crate::denoiser_guides::ViewDenoiserGuideTextures as ViewDlssRayReconstructionTextures;
 
 #[reflect_remote(DlssPerfQualityMode)]
 #[derive(Default)]

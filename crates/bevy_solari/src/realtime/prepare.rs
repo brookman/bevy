@@ -1,31 +1,23 @@
 use super::SolariLighting;
 use crate::scene::RaytracingSceneNeedsPreviousFrameData;
-#[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
-use bevy_anti_alias::dlss::{
-    Dlss, DlssRayReconstructionFeature, ViewDlssRayReconstructionTextures,
-};
+use bevy_anti_alias::denoiser_guides::{DenoiserGuideBuffers, ViewDenoiserGuideTextures};
 use bevy_camera::MainPassResolutionOverride;
 use bevy_diagnostic::FrameCount;
-#[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
-use bevy_ecs::query::Has;
 use bevy_ecs::{
     component::Component,
     entity::Entity,
+    query::Has,
     system::{Commands, Query, Res},
 };
-#[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
 use bevy_image::ToExtents;
 use bevy_math::UVec2;
 use bevy_render::{
     camera::ExtractedCamera,
-    render_resource::{Buffer, BufferDescriptor, BufferInitDescriptor, BufferUsages},
-    renderer::{RenderDevice, RenderQueue},
-};
-#[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
-use bevy_render::{
     render_resource::{
-        TextureDescriptor, TextureDimension, TextureFormat, TextureUsages, TextureViewDescriptor,
+        Buffer, BufferDescriptor, BufferInitDescriptor, BufferUsages, TextureDescriptor,
+        TextureDimension, TextureFormat, TextureUsages, TextureViewDescriptor,
     },
+    renderer::{RenderDevice, RenderQueue},
     texture::CachedTexture,
 };
 use bytemuck::{Pod, Zeroable};
@@ -128,45 +120,52 @@ pub struct SolariReservoirBuffers {
 }
 
 pub fn prepare_solari_lighting_resources(
-    #[cfg(any(not(feature = "dlss"), feature = "force_disable_dlss"))] query: Query<(
+    query: Query<(
         Entity,
         &ExtractedCamera,
         &SolariLighting,
         Option<&SolariLightingResources>,
         Option<&MainPassResolutionOverride>,
-    )>,
-    #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))] query: Query<(
-        Entity,
-        &ExtractedCamera,
-        &SolariLighting,
-        Option<&SolariLightingResources>,
-        Option<&MainPassResolutionOverride>,
-        Has<Dlss<DlssRayReconstructionFeature>>,
+        Has<DenoiserGuideBuffers>,
+        Option<&ViewDenoiserGuideTextures>,
     )>,
     render_device: Res<RenderDevice>,
     render_queue: Res<RenderQueue>,
     frame_count: Res<FrameCount>,
     mut commands: Commands,
 ) {
-    for query_item in &query {
-        #[cfg(any(not(feature = "dlss"), feature = "force_disable_dlss"))]
-        let (entity, camera, solari_lighting, solari_lighting_resources, resolution_override) =
-            query_item;
-        #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
-        let (
-            entity,
-            camera,
-            solari_lighting,
-            solari_lighting_resources,
-            resolution_override,
-            has_dlss_rr,
-        ) = query_item;
-
+    for (
+        entity,
+        camera,
+        solari_lighting,
+        solari_lighting_resources,
+        resolution_override,
+        wants_guide_buffers,
+        guide_textures,
+    ) in &query
+    {
         let Some(mut view_size) = camera.physical_viewport_size else {
             continue;
         };
         if let Some(MainPassResolutionOverride(resolution_override)) = resolution_override {
             view_size = *resolution_override;
+        }
+
+        // Denoiser guide buffers are managed independently of the other resources, so that
+        // a denoiser can be toggled at runtime without the view size changing.
+        match (wants_guide_buffers, guide_textures) {
+            (true, Some(g)) if g.depth.texture.size() == view_size.to_extents() => {}
+            (true, _) => {
+                commands
+                    .entity(entity)
+                    .insert(create_guide_textures(&render_device, view_size));
+            }
+            (false, Some(_)) => {
+                commands
+                    .entity(entity)
+                    .remove::<ViewDenoiserGuideTextures>();
+            }
+            (false, None) => {}
         }
 
         let reusable = solari_lighting_resources.filter(|r| {
@@ -245,96 +244,94 @@ pub fn prepare_solari_lighting_resources(
             world_cache_active_cells_dispatch,
             view_size,
         });
+    }
+}
 
-        #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
-        if has_dlss_rr {
-            let diffuse_albedo = render_device.create_texture(&TextureDescriptor {
-                label: Some("solari_lighting_diffuse_albedo"),
-                size: view_size.to_extents(),
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: TextureDimension::D2,
-                format: TextureFormat::Rgba8Unorm,
-                usage: TextureUsages::TEXTURE_BINDING | TextureUsages::STORAGE_BINDING,
-                view_formats: &[],
-            });
-            let diffuse_albedo_view = diffuse_albedo.create_view(&TextureViewDescriptor::default());
+fn create_guide_textures(
+    render_device: &RenderDevice,
+    view_size: UVec2,
+) -> ViewDenoiserGuideTextures {
+    let diffuse_albedo = render_device.create_texture(&TextureDescriptor {
+        label: Some("solari_lighting_diffuse_albedo"),
+        size: view_size.to_extents(),
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: TextureDimension::D2,
+        format: TextureFormat::Rgba8Unorm,
+        usage: TextureUsages::TEXTURE_BINDING | TextureUsages::STORAGE_BINDING,
+        view_formats: &[],
+    });
+    let diffuse_albedo_view = diffuse_albedo.create_view(&TextureViewDescriptor::default());
 
-            let specular_albedo = render_device.create_texture(&TextureDescriptor {
-                label: Some("solari_lighting_specular_albedo"),
-                size: view_size.to_extents(),
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: TextureDimension::D2,
-                format: TextureFormat::Rgba8Unorm,
-                usage: TextureUsages::TEXTURE_BINDING | TextureUsages::STORAGE_BINDING,
-                view_formats: &[],
-            });
-            let specular_albedo_view =
-                specular_albedo.create_view(&TextureViewDescriptor::default());
+    let specular_albedo = render_device.create_texture(&TextureDescriptor {
+        label: Some("solari_lighting_specular_albedo"),
+        size: view_size.to_extents(),
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: TextureDimension::D2,
+        format: TextureFormat::Rgba8Unorm,
+        usage: TextureUsages::TEXTURE_BINDING | TextureUsages::STORAGE_BINDING,
+        view_formats: &[],
+    });
+    let specular_albedo_view = specular_albedo.create_view(&TextureViewDescriptor::default());
 
-            let normal_roughness = render_device.create_texture(&TextureDescriptor {
-                label: Some("solari_lighting_normal_roughness"),
-                size: view_size.to_extents(),
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: TextureDimension::D2,
-                format: TextureFormat::Rgba16Float,
-                usage: TextureUsages::TEXTURE_BINDING | TextureUsages::STORAGE_BINDING,
-                view_formats: &[],
-            });
-            let normal_roughness_view =
-                normal_roughness.create_view(&TextureViewDescriptor::default());
+    let normal_roughness = render_device.create_texture(&TextureDescriptor {
+        label: Some("solari_lighting_normal_roughness"),
+        size: view_size.to_extents(),
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: TextureDimension::D2,
+        format: TextureFormat::Rgba16Float,
+        usage: TextureUsages::TEXTURE_BINDING | TextureUsages::STORAGE_BINDING,
+        view_formats: &[],
+    });
+    let normal_roughness_view = normal_roughness.create_view(&TextureViewDescriptor::default());
 
-            let dlss_rr_depth = render_device.create_texture(&TextureDescriptor {
-                label: Some("solari_lighting_dlss_rr_depth"),
-                size: view_size.to_extents(),
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: TextureDimension::D2,
-                format: TextureFormat::R32Float,
-                usage: TextureUsages::TEXTURE_BINDING | TextureUsages::STORAGE_BINDING,
-                view_formats: &[],
-            });
-            let dlss_rr_depth_view = dlss_rr_depth.create_view(&TextureViewDescriptor::default());
+    let guide_depth = render_device.create_texture(&TextureDescriptor {
+        label: Some("solari_lighting_guide_depth"),
+        size: view_size.to_extents(),
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: TextureDimension::D2,
+        format: TextureFormat::R32Float,
+        usage: TextureUsages::TEXTURE_BINDING | TextureUsages::STORAGE_BINDING,
+        view_formats: &[],
+    });
+    let guide_depth_view = guide_depth.create_view(&TextureViewDescriptor::default());
 
-            let specular_motion_vectors = render_device.create_texture(&TextureDescriptor {
-                label: Some("solari_lighting_specular_motion_vectors"),
-                size: view_size.to_extents(),
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: TextureDimension::D2,
-                format: TextureFormat::Rg16Float,
-                usage: TextureUsages::TEXTURE_BINDING | TextureUsages::STORAGE_BINDING,
-                view_formats: &[],
-            });
-            let specular_motion_vectors_view =
-                specular_motion_vectors.create_view(&TextureViewDescriptor::default());
+    let specular_motion_vectors = render_device.create_texture(&TextureDescriptor {
+        label: Some("solari_lighting_specular_motion_vectors"),
+        size: view_size.to_extents(),
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: TextureDimension::D2,
+        format: TextureFormat::Rg16Float,
+        usage: TextureUsages::TEXTURE_BINDING | TextureUsages::STORAGE_BINDING,
+        view_formats: &[],
+    });
+    let specular_motion_vectors_view =
+        specular_motion_vectors.create_view(&TextureViewDescriptor::default());
 
-            commands
-                .entity(entity)
-                .insert(ViewDlssRayReconstructionTextures {
-                    diffuse_albedo: CachedTexture {
-                        texture: diffuse_albedo,
-                        default_view: diffuse_albedo_view,
-                    },
-                    specular_albedo: CachedTexture {
-                        texture: specular_albedo,
-                        default_view: specular_albedo_view,
-                    },
-                    normal_roughness: CachedTexture {
-                        texture: normal_roughness,
-                        default_view: normal_roughness_view,
-                    },
-                    depth: CachedTexture {
-                        texture: dlss_rr_depth,
-                        default_view: dlss_rr_depth_view,
-                    },
-                    specular_motion_vectors: CachedTexture {
-                        texture: specular_motion_vectors,
-                        default_view: specular_motion_vectors_view,
-                    },
-                });
-        }
+    ViewDenoiserGuideTextures {
+        diffuse_albedo: CachedTexture {
+            texture: diffuse_albedo,
+            default_view: diffuse_albedo_view,
+        },
+        specular_albedo: CachedTexture {
+            texture: specular_albedo,
+            default_view: specular_albedo_view,
+        },
+        normal_roughness: CachedTexture {
+            texture: normal_roughness,
+            default_view: normal_roughness_view,
+        },
+        depth: CachedTexture {
+            texture: guide_depth,
+            default_view: guide_depth_view,
+        },
+        specular_motion_vectors: CachedTexture {
+            texture: specular_motion_vectors,
+            default_view: specular_motion_vectors_view,
+        },
     }
 }

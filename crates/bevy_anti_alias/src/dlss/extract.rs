@@ -1,4 +1,5 @@
 use super::{prepare::DlssRenderContext, Dlss, DlssFeature};
+use crate::denoiser_guides::DenoiserGuideBuffers;
 use bevy_camera::{Camera, Hdr, MainPassResolutionOverride, Projection};
 use bevy_ecs::{
     query::{Has, With},
@@ -20,9 +21,15 @@ pub fn extract_dlss<F: DlssFeature>(
             .expect("Camera entity wasn't synced.");
         if dlss.is_some() && camera.is_active && camera_projection.is_perspective() {
             entity_commands.insert(dlss.as_deref().unwrap().clone());
+            if F::NEEDS_GUIDE_BUFFERS {
+                entity_commands.insert(DenoiserGuideBuffers);
+            }
             dlss.as_mut().unwrap().reset = false;
         } else if cleanup_query.get(entity) == Ok(true) {
             entity_commands.remove::<(Dlss<F>, DlssRenderContext<F>, MainPassResolutionOverride)>();
+            if F::NEEDS_GUIDE_BUFFERS {
+                entity_commands.remove::<DenoiserGuideBuffers>();
+            }
         }
     }
 }

@@ -12,6 +12,7 @@ use smaa::SmaaPlugin;
 use taa::TemporalAntiAliasPlugin;
 
 pub mod contrast_adaptive_sharpening;
+pub mod denoiser_guides;
 #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
 pub mod dlss;
 pub mod fxaa;
