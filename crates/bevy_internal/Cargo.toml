@@ -95,6 +95,9 @@ dfg_lut = ["bevy_pbr?/dfg_lut", "ktx2", "bevy_image/zstd"]
 # Include Look Up Tables that are required for area lights.
 area_light_luts = ["bevy_pbr?/area_light_luts", "ktx2", "bevy_image/zstd"]
 
+# Apple MetalFX denoiser for Solari (macOS only)
+metalfx = ["bevy_anti_alias/metalfx"]
+
 # NVIDIA Deep Learning Super Sampling
 dlss = ["bevy_anti_alias/dlss", "bevy_solari?/dlss"]
 

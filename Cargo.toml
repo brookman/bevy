@@ -604,6 +604,9 @@ dfg_lut = ["bevy_internal/dfg_lut"]
 # Include Look Up Tables that are required for area lights.
 area_light_luts = ["bevy_internal/area_light_luts"]
 
+# Apple MetalFX denoiser for Solari (macOS only)
+metalfx = ["bevy_internal/metalfx"]
+
 # NVIDIA Deep Learning Super Sampling
 dlss = ["bevy_internal/dlss"]
 

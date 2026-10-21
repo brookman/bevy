@@ -16,6 +16,8 @@ pub mod denoiser_guides;
 #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
 pub mod dlss;
 pub mod fxaa;
+#[cfg(all(feature = "metalfx", target_os = "macos"))]
+pub mod metalfx;
 pub mod smaa;
 pub mod taa;
 
@@ -32,6 +34,8 @@ impl Plugin for AntiAliasPlugin {
             CasPlugin,
             #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
             dlss::DlssPlugin,
+            #[cfg(all(feature = "metalfx", target_os = "macos"))]
+            metalfx::MetalFxPlugin,
         ));
     }
 }
