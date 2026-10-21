@@ -83,6 +83,10 @@ pub struct MetalFxDenoiser {
     /// Ratio of output resolution to render resolution. `1.0` disables upscaling.
     ///
     /// Clamped to the range supported by the device (typically `1.0..=3.0`).
+    ///
+    /// Defaults to `2.0`: the denoiser's own cost scales with the input resolution, and at
+    /// native resolution on high-DPI displays it can easily exceed a 120 Hz frame budget
+    /// (measured ~6.5 ms at 2560x1440 on an M5, vs ~2.3 ms at 2x).
     pub upscale_ratio: f32,
     /// Set to true to delete the saved temporal history (past frames).
     ///
@@ -97,7 +101,7 @@ pub struct MetalFxDenoiser {
 impl Default for MetalFxDenoiser {
     fn default() -> Self {
         Self {
-            upscale_ratio: 1.0,
+            upscale_ratio: 2.0,
             reset: false,
         }
     }
