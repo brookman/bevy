@@ -76,6 +76,16 @@ fn main() {
             app.add_systems(Update, (pause_scene, toggle_lights, patrol_path));
         }
         app.add_systems(PostUpdate, (update_control_text, update_performance_text));
+
+        #[cfg(all(feature = "metalfx", target_os = "macos"))]
+        app.add_systems(Update, (metalfx::enable_by_default, metalfx::toggle))
+            .add_systems(
+                PostUpdate,
+                (
+                    metalfx::control_text.after(update_control_text),
+                    metalfx::performance_text.after(update_performance_text),
+                ),
+            );
     }
 
     app.run();
@@ -677,5 +687,91 @@ fn update_performance_text(
             world_cache_active_cells_count as u32,
             (world_cache_active_cells_count * 100.0) / (2u64.pow(20) as f64)
         ));
+    }
+}
+
+#[cfg(all(feature = "metalfx", target_os = "macos"))]
+mod metalfx {
+    use super::{ControlText, PerformanceText};
+    use bevy::{
+        anti_alias::metalfx::{MetalFxDenoiser, MetalFxDenoiserSupported},
+        diagnostic::{Diagnostic, DiagnosticPath, DiagnosticsStore},
+        prelude::*,
+        render::camera::{MipBias, TemporalJitter},
+        solari::prelude::SolariLighting,
+    };
+
+    pub fn enable_by_default(
+        mut commands: Commands,
+        cameras: Query<Entity, Added<SolariLighting>>,
+        supported: Option<Res<MetalFxDenoiserSupported>>,
+    ) {
+        if supported.is_some() {
+            for entity in &cameras {
+                commands.entity(entity).insert(MetalFxDenoiser::default());
+            }
+        }
+    }
+
+    pub fn toggle(
+        mut commands: Commands,
+        camera: Single<(Entity, Option<&mut MetalFxDenoiser>), With<SolariLighting>>,
+        supported: Option<Res<MetalFxDenoiserSupported>>,
+        key_input: Res<ButtonInput<KeyCode>>,
+    ) {
+        if supported.is_none() {
+            return;
+        }
+        let (entity, denoiser) = camera.into_inner();
+        if key_input.just_pressed(KeyCode::Digit4) {
+            if denoiser.is_some() {
+                commands
+                    .entity(entity)
+                    .remove::<(MetalFxDenoiser, TemporalJitter, MipBias)>();
+            } else {
+                commands.entity(entity).insert(MetalFxDenoiser::default());
+            }
+        } else if key_input.just_pressed(KeyCode::Digit5)
+            && let Some(mut denoiser) = denoiser
+        {
+            denoiser.upscale_ratio = if denoiser.upscale_ratio > 1.0 { 1.0 } else { 2.0 };
+        }
+    }
+
+    pub fn control_text(
+        mut text: Single<&mut Text, With<ControlText>>,
+        supported: Option<Res<MetalFxDenoiserSupported>>,
+        camera: Query<Option<&MetalFxDenoiser>, With<SolariLighting>>,
+    ) {
+        if supported.is_none() {
+            text.0.push_str("\nMetalFX denoiser not supported");
+            return;
+        }
+        match camera.single() {
+            Ok(Some(denoiser)) => {
+                text.0.push_str("\n(4): Disable MetalFX denoiser");
+                text.0.push_str(&format!(
+                    "\n(5): Toggle MetalFX upscaling (currently {:.1}x)",
+                    denoiser.upscale_ratio
+                ));
+            }
+            _ => text.0.push_str("\n(4): Enable MetalFX denoiser"),
+        }
+    }
+
+    pub fn performance_text(
+        mut text: Single<&mut Text, With<PerformanceText>>,
+        diagnostics: Res<DiagnosticsStore>,
+        camera: Query<Has<MetalFxDenoiser>, With<SolariLighting>>,
+    ) {
+        if !matches!(camera.single(), Ok(true)) {
+            return;
+        }
+        if let Some(value) = diagnostics
+            .get(&DiagnosticPath::new("render/metalfx_denoiser/elapsed_gpu"))
+            .and_then(Diagnostic::smoothed)
+        {
+            text.push_str(&format!("\n{:17}  {value:.2} ms", "MetalFX"));
+        }
     }
 }
