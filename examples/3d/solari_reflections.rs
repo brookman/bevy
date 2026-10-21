@@ -51,6 +51,7 @@ fn main() {
             toggle_metallic,
             toggle_pathtracer,
             toggle_mirror_motion,
+            toggle_restir,
             select_preset,
             update_roughness,
             move_objects,
@@ -149,6 +150,7 @@ enum ControlRow {
     MirrorSlide,
     Renderer,
     Denoising,
+    Restir,
 }
 
 #[derive(Component)]
@@ -462,6 +464,7 @@ fn spawn_ui(commands: &mut Commands) {
             heading("RENDERER"),
             row("P", ControlRow::Renderer),
             row("2", ControlRow::Denoising),
+            row("R", ControlRow::Restir),
         ],
     ));
 
@@ -828,10 +831,22 @@ fn toggle_dlss_rr(
     }
 }
 
+fn toggle_restir(
+    key_input: Res<ButtonInput<KeyCode>>,
+    solari_lighting: Option<Single<&mut SolariLighting>>,
+) {
+    if key_input.just_pressed(KeyCode::KeyR)
+        && let Some(mut solari_lighting) = solari_lighting
+    {
+        solari_lighting.restir = !solari_lighting.restir;
+    }
+}
+
 fn update_control_text(
     mut rows: Query<(&ControlRow, &mut Text)>,
     state: Res<DemoState>,
     pathtracing: Query<(), With<Pathtracer>>,
+    solari_lighting: Query<&SolariLighting>,
     #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))] dlss_rr_supported: Option<
         Res<DlssRayReconstructionSupported>,
     >,
@@ -875,6 +890,11 @@ fn update_control_text(
                 "Switch to reference pathtracer"
             } else {
                 "Switch to realtime lighting  -  pause to let the pathtracer converge"
+            }),
+            ControlRow::Restir => text.0.push_str(match solari_lighting.single() {
+                Ok(s) if s.restir => "Disable ReSTIR",
+                Ok(_) => "Enable ReSTIR",
+                Err(_) => "ReSTIR (realtime lighting only)",
             }),
             ControlRow::Denoising => {
                 #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
