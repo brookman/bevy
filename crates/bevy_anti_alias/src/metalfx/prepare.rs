@@ -9,7 +9,7 @@ use bevy_ecs::{
     system::{Commands, Query, Res},
 };
 use bevy_image::ToExtents;
-use bevy_math::{UVec2, Vec2, Vec4Swizzles};
+use bevy_math::{ops, UVec2, Vec2, Vec4Swizzles};
 use bevy_render::{
     camera::{MipBias, TemporalJitter},
     render_resource::{
@@ -128,7 +128,7 @@ pub fn prepare_metalfx(
                     },
                     MainPassResolutionOverride(input_size),
                 ));
-                mip_bias.0 = (input_size.x as f32 / output_size.x as f32).log2() - 1.0;
+                mip_bias.0 = ops::log2(input_size.x as f32 / output_size.x as f32) - 1.0;
                 input_size
             }
         };

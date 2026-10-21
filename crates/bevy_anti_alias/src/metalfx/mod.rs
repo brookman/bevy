@@ -84,9 +84,9 @@ pub struct MetalFxDenoiser {
     ///
     /// Clamped to the range supported by the device (typically `1.0..=3.0`).
     ///
-    /// Defaults to `2.0`: the denoiser's own cost scales with the input resolution, and at
-    /// native resolution on high-DPI displays it can easily exceed a 120 Hz frame budget
-    /// (measured ~6.5 ms at 2560x1440 on an M5, vs ~2.3 ms at 2x).
+    /// Defaults to `2.0`. The denoiser's cost scales with its input resolution, so running it at
+    /// native resolution on high-DPI displays can be expensive; upscaling keeps the cost of both
+    /// the denoiser and the path tracer down.
     pub upscale_ratio: f32,
     /// Set to true to delete the saved temporal history (past frames).
     ///

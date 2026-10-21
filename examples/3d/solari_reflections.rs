@@ -1012,7 +1012,11 @@ mod metalfx {
         } else if key_input.just_pressed(KeyCode::KeyU)
             && let Some(mut denoiser) = denoiser
         {
-            denoiser.upscale_ratio = if denoiser.upscale_ratio > 1.0 { 1.0 } else { 2.0 };
+            denoiser.upscale_ratio = if denoiser.upscale_ratio > 1.0 {
+                1.0
+            } else {
+                2.0
+            };
         }
     }
 

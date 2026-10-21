@@ -1,6 +1,7 @@
 doc-valid-idents = [
   "GameActivity",
   "GilRs",
+  "MetalFX",
   "glTF",
   "NVidia",
   "OpenXR",

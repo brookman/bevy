@@ -8,7 +8,7 @@
 use bevy_math::{Mat4, UVec2, Vec2};
 use bevy_render::renderer::RenderDevice;
 use objc2::{rc::Retained, runtime::ProtocolObject};
-use objc2_metal::{MTLDevice, MTLPixelFormat, MTLTexture};
+use objc2_metal::{MTLDevice, MTLPixelFormat};
 use objc2_metal_fx::{
     MTLFXTemporalDenoisedScaler, MTLFXTemporalDenoisedScalerBase,
     MTLFXTemporalDenoisedScalerDescriptor,
@@ -41,19 +41,23 @@ fn with_raw_device<R>(
 
 /// Whether the current device and OS support the MetalFX temporal denoised scaler.
 pub fn is_supported(device: &RenderDevice) -> bool {
-    with_raw_device(device, |d| unsafe {
-        MTLFXTemporalDenoisedScalerDescriptor::supportsDevice(d)
+    with_raw_device(device, |d| {
+        // SAFETY: `d` is a valid Metal device for the duration of the call.
+        unsafe { MTLFXTemporalDenoisedScalerDescriptor::supportsDevice(d) }
     })
     .unwrap_or(false)
 }
 
 /// Supported (min, max) ratios of output to input resolution.
 pub fn supported_scale_range(device: &RenderDevice) -> (f32, f32) {
-    with_raw_device(device, |d| unsafe {
-        (
-            MTLFXTemporalDenoisedScalerDescriptor::supportedInputContentMinScaleForDevice(d),
-            MTLFXTemporalDenoisedScalerDescriptor::supportedInputContentMaxScaleForDevice(d),
-        )
+    with_raw_device(device, |d| {
+        // SAFETY: `d` is a valid Metal device for the duration of the call.
+        unsafe {
+            (
+                MTLFXTemporalDenoisedScalerDescriptor::supportedInputContentMinScaleForDevice(d),
+                MTLFXTemporalDenoisedScalerDescriptor::supportedInputContentMaxScaleForDevice(d),
+            )
+        }
     })
     .unwrap_or((1.0, 1.0))
 }
@@ -68,6 +72,7 @@ pub struct Scaler {
 // SAFETY: Metal objects are reference counted with atomic refcounts and MetalFX scalers can be
 // used from any thread, as long as encoding is externally synchronized (we wrap it in a Mutex).
 unsafe impl Send for Scaler {}
+// SAFETY: see `Send` above; all mutation goes through `&self` methods called under a Mutex.
 unsafe impl Sync for Scaler {}
 
 /// Textures and parameters for a single denoising pass.
@@ -91,6 +96,7 @@ pub struct EncodeParams<'a> {
 
 impl Scaler {
     pub fn new(device: &RenderDevice, input_size: UVec2, output_size: UVec2) -> Option<Self> {
+        // SAFETY: `d` is a valid Metal device; the descriptor only receives plain values.
         with_raw_device(device, |d| unsafe {
             let desc = MTLFXTemporalDenoisedScalerDescriptor::new();
             desc.setColorTextureFormat(COLOR_FORMAT);
@@ -134,19 +140,16 @@ impl Scaler {
             let normal = tex(p.normal);
             let roughness = tex(p.roughness);
             let output = tex(p.output);
-            let raw_tex = |t: &wgpu::hal::metal::Texture| -> *const ProtocolObject<dyn MTLTexture> {
-                t.raw_handle()
-            };
 
             let s = &*self.raw;
-            s.setColorTexture(Some(&*raw_tex(&color)));
-            s.setDepthTexture(Some(&*raw_tex(&depth)));
-            s.setMotionTexture(Some(&*raw_tex(&motion)));
-            s.setDiffuseAlbedoTexture(Some(&*raw_tex(&diffuse)));
-            s.setSpecularAlbedoTexture(Some(&*raw_tex(&specular)));
-            s.setNormalTexture(Some(&*raw_tex(&normal)));
-            s.setRoughnessTexture(Some(&*raw_tex(&roughness)));
-            s.setOutputTexture(Some(&*raw_tex(&output)));
+            s.setColorTexture(Some(color.raw_handle()));
+            s.setDepthTexture(Some(depth.raw_handle()));
+            s.setMotionTexture(Some(motion.raw_handle()));
+            s.setDiffuseAlbedoTexture(Some(diffuse.raw_handle()));
+            s.setSpecularAlbedoTexture(Some(specular.raw_handle()));
+            s.setNormalTexture(Some(normal.raw_handle()));
+            s.setRoughnessTexture(Some(roughness.raw_handle()));
+            s.setOutputTexture(Some(output.raw_handle()));
 
             s.setJitterOffsetX(p.jitter_offset.x);
             s.setJitterOffsetY(p.jitter_offset.y);
